@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { auth } from '../firebase';
+
+// Mock User type to replace Firebase User
+interface User {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+}
 
 interface FirebaseContextType {
   user: User | null;
@@ -18,32 +24,28 @@ export const useFirebase = () => {
 };
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Initialize with a mock user so it's always logged in
+  const [user, setUser] = useState<User | null>({
+    uid: 'local-user-123',
+    email: 'local@example.com',
+    displayName: 'Local User',
+    photoURL: null
+  });
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
+  // Mock signIn function
   const signIn = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error('Error signing in with Google', error);
-    }
+    setUser({
+      uid: 'local-user-123',
+      email: 'local@example.com',
+      displayName: 'Local User',
+      photoURL: null
+    });
   };
 
+  // Mock logOut function
   const logOut = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error('Error signing out', error);
-    }
+    setUser(null);
   };
 
   return (
