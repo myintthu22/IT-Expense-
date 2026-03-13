@@ -580,27 +580,36 @@ export default function App() {
     if (!file) return;
 
     setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      // 1. Upload to get extracted text
-      const uploadRes = await fetch('/api/upload', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json'
-        },
-        body: formData
-      });
-      
-      if (!uploadRes.ok) throw new Error("Failed to upload file");
-      const { extractedText } = await uploadRes.json();
+      let extractedText = '';
+      let inlineData: any = null;
+
+      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
+        const data = await file.arrayBuffer();
+        const workbook = xlsx.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        extractedText = xlsx.utils.sheet_to_csv(worksheet);
+      } else if (file.name.endsWith('.pdf')) {
+        const buffer = await file.arrayBuffer();
+        const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+        inlineData = {
+          data: base64,
+          mimeType: 'application/pdf'
+        };
+      } else {
+        throw new Error("Unsupported file format. Please upload PDF, XLSX, XLS, or CSV.");
+      }
 
       // 2. Call Gemini from frontend
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Extract IT asset and expense data from the following text/data. 
+      
+      const contents: any = [];
+      if (inlineData) {
+        contents.push({ inlineData });
+      }
+      
+      const promptText = `Extract IT asset and expense data from the following text/data. 
         The data could be from a "Reimbursement of Expenses" form, a "Payment Requisition Form", or a generic Excel/CSV list of old records.
         
         Guidelines:
@@ -627,7 +636,13 @@ export default function App() {
         - invoice_number (Reference No or REF)
         - type ('Asset' or 'Expense')
         
-        Data: ${extractedText}`,
+        Data: ${extractedText}`;
+
+      contents.push({ text: promptText });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: { parts: contents },
         config: {
           responseMimeType: "application/json",
           responseSchema: {
