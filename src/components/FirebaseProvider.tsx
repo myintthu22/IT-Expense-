@@ -1,17 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-
-// Mock User type to replace Firebase User
-interface User {
-  uid: string;
-  email: string | null;
-  displayName: string | null;
-  photoURL: string | null;
-}
+import { User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 
 interface FirebaseContextType {
   user: User | null;
   loading: boolean;
-  signIn: () => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   logOut: () => Promise<void>;
 }
 
@@ -24,32 +19,36 @@ export const useFirebase = () => {
 };
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Initialize with a mock user so it's always logged in
-  const [user, setUser] = useState<User | null>({
-    uid: 'local-user-123',
-    email: 'local@example.com',
-    displayName: 'Local User',
-    photoURL: null
-  });
-  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Mock signIn function
-  const signIn = async () => {
-    setUser({
-      uid: 'local-user-123',
-      email: 'local@example.com',
-      displayName: 'Local User',
-      photoURL: null
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
     });
+
+    return () => unsubscribe();
+  }, []);
+
+  const login = async (email: string, password: string) => {
+    await signInWithEmailAndPassword(auth, email, password);
   };
 
-  // Mock logOut function
+  const signUp = async (email: string, password: string) => {
+    await createUserWithEmailAndPassword(auth, email, password);
+  };
+
   const logOut = async () => {
-    setUser(null);
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Error signing out', error);
+    }
   };
 
   return (
-    <FirebaseContext.Provider value={{ user, loading, signIn, logOut }}>
+    <FirebaseContext.Provider value={{ user, loading, login, signUp, logOut }}>
       {children}
     </FirebaseContext.Provider>
   );

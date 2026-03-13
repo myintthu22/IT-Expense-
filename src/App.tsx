@@ -307,7 +307,12 @@ export default function App() {
     currency: 'Kyats'
   });
 
-  const { user, loading: authLoading, signIn, logOut } = useFirebase();
+  const { user, loading: authLoading, login, signUp, logOut } = useFirebase();
+
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
 
   const [dashboardFilters, setDashboardFilters] = useState({
     startDate: '',
@@ -486,15 +491,84 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full text-center">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full">
           <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
             <Key size={32} />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">IT Asset Manager</h2>
-          <p className="text-slate-600 mb-8">Sign in to manage your organization's IT assets, expenses, and licenses securely.</p>
-          <Button onClick={signIn} className="w-full h-12 text-base">
-            Sign in with Google
-          </Button>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2 text-center">IT Asset Manager</h2>
+          <p className="text-slate-600 mb-8 text-center">
+            {isSignUpMode ? "Create a new user account." : "Sign in to manage your organization's IT assets, expenses, and licenses."}
+          </p>
+          
+          {loginError && (
+            <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm text-center">
+              {loginError}
+            </div>
+          )}
+
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            setLoginError('');
+            
+            // Convert username to a dummy email behind the scenes for Firebase Auth
+            const email = `${loginUsername.toLowerCase().trim()}@itexpense.local`;
+            
+            try {
+              if (isSignUpMode) {
+                await signUp(email, loginPassword);
+              } else {
+                await login(email, loginPassword);
+              }
+            } catch (err: any) {
+              if (err.code === 'auth/invalid-credential') {
+                setLoginError('Invalid username or password.');
+              } else if (err.code === 'auth/email-already-in-use') {
+                setLoginError('This username already exists.');
+              } else if (err.code === 'auth/weak-password') {
+                setLoginError('Password should be at least 6 characters.');
+              } else {
+                setLoginError(err.message || 'Authentication failed.');
+              }
+            }
+          }} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
+              <input 
+                type="text" 
+                required
+                value={loginUsername}
+                onChange={e => setLoginUsername(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="e.g. user1"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+              <input 
+                type="password" 
+                required
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="••••••••"
+              />
+            </div>
+            <Button type="submit" className="w-full h-12 text-base mt-2">
+              {isSignUpMode ? "Create User" : "Sign In"}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button 
+              onClick={() => {
+                setIsSignUpMode(!isSignUpMode);
+                setLoginError('');
+              }}
+              className="text-sm text-slate-500 hover:text-slate-800 transition-colors"
+            >
+              {isSignUpMode ? "Back to Sign In" : "Need to create a user? (Admin Only)"}
+            </button>
+          </div>
         </div>
       </div>
     );
