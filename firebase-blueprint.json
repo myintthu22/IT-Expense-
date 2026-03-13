@@ -1,0 +1,105 @@
+{
+  "entities": {
+    "Expense": {
+      "title": "Expense",
+      "description": "An IT expense record",
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "payment_date": { "type": "string", "format": "date" },
+        "amount": { "type": "number" },
+        "vendor": { "type": "string" },
+        "category": { "type": "string" },
+        "type": { "type": "string" },
+        "user": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["description", "payment_date", "amount", "vendor", "category", "type", "userId"]
+    },
+    "Asset": {
+      "title": "Asset",
+      "description": "An IT asset",
+      "type": "object",
+      "properties": {
+        "expense_id": { "type": "string" },
+        "asset_name": { "type": "string" },
+        "asset_tag": { "type": "string" },
+        "status": { "type": "string" },
+        "assigned_to": { "type": "string" },
+        "category": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["asset_name", "status", "userId"]
+    },
+    "AssetHistory": {
+      "title": "Asset History",
+      "description": "History of changes to an asset",
+      "type": "object",
+      "properties": {
+        "asset_id": { "type": "string" },
+        "status": { "type": "string" },
+        "assigned_to": { "type": "string" },
+        "notes": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["asset_id", "status", "timestamp", "userId"]
+    },
+    "License": {
+      "title": "License",
+      "description": "A software license",
+      "type": "object",
+      "properties": {
+        "software_name": { "type": "string" },
+        "vendor": { "type": "string" },
+        "license_key": { "type": "string" },
+        "start_date": { "type": "string", "format": "date" },
+        "end_date": { "type": "string", "format": "date" },
+        "cost": { "type": "number" },
+        "currency": { "type": "string" },
+        "status": { "type": "string" },
+        "assigned_to": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["software_name", "vendor", "start_date", "end_date", "cost", "status", "userId"]
+    },
+    "SystemActivity": {
+      "title": "System Activity",
+      "description": "Log of system activities",
+      "type": "object",
+      "properties": {
+        "action_type": { "type": "string" },
+        "entity_type": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["action_type", "entity_type", "description", "timestamp", "userId"]
+    }
+  },
+  "firestore": {
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Stores IT expenses"
+    },
+    "/assets/{assetId}": {
+      "schema": { "$ref": "#/entities/Asset" },
+      "description": "Stores IT assets"
+    },
+    "/asset_history/{historyId}": {
+      "schema": { "$ref": "#/entities/AssetHistory" },
+      "description": "Stores history of asset changes"
+    },
+    "/licenses/{licenseId}": {
+      "schema": { "$ref": "#/entities/License" },
+      "description": "Stores software licenses"
+    },
+    "/system_activities/{activityId}": {
+      "schema": { "$ref": "#/entities/SystemActivity" },
+      "description": "Stores system activity logs"
+    }
+  }
+}

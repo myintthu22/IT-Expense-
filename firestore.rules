@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    
+    function uidUnchanged() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == resource.data.userId;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function isValidExpense(data) {
+      return data.description is string && data.description.size() < 500 &&
+             data.payment_date is string && data.payment_date.size() < 50 &&
+             data.amount is number && data.amount >= 0 &&
+             data.vendor is string && data.vendor.size() < 200 &&
+             data.category is string && data.category.size() < 100 &&
+             data.type is string && data.type.size() < 100 &&
+             data.userId is string && data.userId.size() < 100;
+    }
+    
+    function isValidAsset(data) {
+      return data.asset_name is string && data.asset_name.size() < 200 &&
+             data.status is string && data.status.size() < 100 &&
+             data.userId is string && data.userId.size() < 100;
+    }
+    
+    function isValidAssetHistory(data) {
+      return data.asset_id is string && data.asset_id.size() < 100 &&
+             data.status is string && data.status.size() < 100 &&
+             data.timestamp is string && data.timestamp.size() < 50 &&
+             data.userId is string && data.userId.size() < 100;
+    }
+    
+    function isValidLicense(data) {
+      return data.software_name is string && data.software_name.size() < 200 &&
+             data.vendor is string && data.vendor.size() < 200 &&
+             data.start_date is string && data.start_date.size() < 50 &&
+             data.end_date is string && data.end_date.size() < 50 &&
+             data.cost is number && data.cost >= 0 &&
+             data.status is string && data.status.size() < 100 &&
+             data.userId is string && data.userId.size() < 100;
+    }
+    
+    function isValidSystemActivity(data) {
+      return data.action_type is string && data.action_type.size() < 100 &&
+             data.entity_type is string && data.entity_type.size() < 100 &&
+             data.description is string && data.description.size() < 500 &&
+             data.timestamp is string && data.timestamp.size() < 50 &&
+             data.userId is string && data.userId.size() < 100;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /expenses/{expenseId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['description', 'payment_date', 'amount', 'vendor', 'category', 'type', 'userId']) &&
+                    isValidExpense(request.resource.data) && 
+                    uidUnchanged();
+      allow update: if isDocOwner() && 
+                    isValidExpense(request.resource.data) && 
+                    uidNotModified();
+      allow delete: if isDocOwner();
+    }
+    
+    match /assets/{assetId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['asset_name', 'status', 'userId']) &&
+                    isValidAsset(request.resource.data) && 
+                    uidUnchanged();
+      allow update: if isDocOwner() && 
+                    isValidAsset(request.resource.data) && 
+                    uidNotModified();
+      allow delete: if isDocOwner();
+    }
+    
+    match /asset_history/{historyId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['asset_id', 'status', 'timestamp', 'userId']) &&
+                    isValidAssetHistory(request.resource.data) && 
+                    uidUnchanged();
+      allow update: if isDocOwner() && 
+                    isValidAssetHistory(request.resource.data) && 
+                    uidNotModified();
+      allow delete: if isDocOwner();
+    }
+    
+    match /licenses/{licenseId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['software_name', 'vendor', 'start_date', 'end_date', 'cost', 'status', 'userId']) &&
+                    isValidLicense(request.resource.data) && 
+                    uidUnchanged();
+      allow update: if isDocOwner() && 
+                    isValidLicense(request.resource.data) && 
+                    uidNotModified();
+      allow delete: if isDocOwner();
+    }
+    
+    match /system_activities/{activityId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['action_type', 'entity_type', 'description', 'timestamp', 'userId']) &&
+                    isValidSystemActivity(request.resource.data) && 
+                    uidUnchanged();
+      allow update: if isDocOwner() && 
+                    isValidSystemActivity(request.resource.data) && 
+                    uidNotModified();
+      allow delete: if isDocOwner();
+    }
+  }
+}

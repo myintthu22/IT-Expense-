@@ -60,6 +60,9 @@ import autoTable from 'jspdf-autotable';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI, Type } from "@google/genai";
+import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, writeBatch, serverTimestamp, getDocs } from 'firebase/firestore';
+import { db } from './firebase';
+import { useFirebase } from './components/FirebaseProvider';
 
 const EXCHANGE_RATE = 4500; // 1 USD = 4500 Kyats
 
@@ -82,7 +85,7 @@ const formatDate = (dateStr: string | undefined | null, formatStr: string = 'MMM
 
 // Types
 interface Expense {
-  id: number;
+  id: string;
   payment_date: string;
   vendor: string;
   description: string;
@@ -97,8 +100,8 @@ interface Expense {
 }
 
 interface Asset {
-  id: number;
-  expense_id: number;
+  id: string;
+  expense_id: string;
   asset_name: string;
   purchase_date: string;
   cost: number;
@@ -116,8 +119,8 @@ interface Asset {
 }
 
 interface AssetHistory {
-  id: number;
-  asset_id: number;
+  id: string;
+  asset_id: string;
   change_date: string;
   status: string;
   assigned_to: string;
@@ -125,7 +128,7 @@ interface AssetHistory {
 }
 
 interface License {
-  id: number;
+  id: string;
   software_name: string;
   vendor: string;
   license_key: string;
@@ -142,6 +145,8 @@ interface Stats {
   categorySpending: { category: string; total: number }[];
   vendorSpending: { vendor: string; total: number }[];
   typeSpending: { type: string; total: number }[];
+  assetAllocationByDepartment: { department: string; count: number }[];
+  assetAllocationByLocation: { location: string; count: number }[];
   summary: {
     totalSpending: number;
     totalCount: number;
@@ -152,7 +157,7 @@ interface Stats {
 }
 
 interface Activity {
-  id: number;
+  id: string;
   action_type: string;
   entity_type: string;
   description: string;
@@ -258,13 +263,13 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'All' | 'Asset' | 'Expense'>('All');
   const [assetStatusFilter, setAssetStatusFilter] = useState<string>('All');
-  const [selectedAssetIds, setSelectedAssetIds] = useState<number[]>([]);
-  const [selectedExpenseIds, setSelectedExpenseIds] = useState<number[]>([]);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showAssetModal, setShowAssetModal] = useState(false);
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [showActionModal, setShowActionModal] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [assetAction, setAssetAction] = useState<{
     type: 'Check out' | 'Check in' | 'Lease' | 'Lease Return' | 'Dispose' | 'Maintenance' | 'Move' | 'Reserve';
     assets: Asset[];
@@ -302,38 +307,198 @@ export default function App() {
     currency: 'Kyats'
   });
 
+  const { user, loading: authLoading, signIn, logOut } = useFirebase();
+
   const [dashboardFilters, setDashboardFilters] = useState({
     startDate: '',
     endDate: '',
     category: 'All'
   });
 
-  const fetchData = async (filters = dashboardFilters) => {
+  useEffect(() => {
+    if (!user) return;
+
     setLoading(true);
+
+    const expensesQuery = query(collection(db, 'expenses'), where('userId', '==', user.uid));
+    const unsubExpenses = onSnapshot(expensesQuery, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(data);
+    });
+
+    const assetsQuery = query(collection(db, 'assets'), where('userId', '==', user.uid));
+    const unsubAssets = onSnapshot(assetsQuery, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Asset));
+      setAssets(data);
+    });
+
+    const licensesQuery = query(collection(db, 'licenses'), where('userId', '==', user.uid));
+    const unsubLicenses = onSnapshot(licensesQuery, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as License));
+      setLicenses(data);
+    });
+
+    const activitiesQuery = query(collection(db, 'system_activities'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'));
+    const unsubActivities = onSnapshot(activitiesQuery, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Activity));
+      setActivities(data);
+    });
+
+    setLoading(false);
+
+    return () => {
+      unsubExpenses();
+      unsubAssets();
+      unsubLicenses();
+      unsubActivities();
+    };
+  }, [user]);
+
+  // Calculate stats locally since we have all data
+  useEffect(() => {
+    if (!expenses.length && !assets.length) return;
+
+    // Filter expenses based on dashboardFilters
+    let filteredExp = expenses;
+    if (dashboardFilters.startDate) {
+      filteredExp = filteredExp.filter(e => e.payment_date >= dashboardFilters.startDate);
+    }
+    if (dashboardFilters.endDate) {
+      filteredExp = filteredExp.filter(e => e.payment_date <= dashboardFilters.endDate);
+    }
+    if (dashboardFilters.category !== 'All') {
+      filteredExp = filteredExp.filter(e => e.category === dashboardFilters.category);
+    }
+
+    const totalSpending = filteredExp.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const totalOpEx = filteredExp.filter(e => e.type === 'Expense').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const totalCapEx = filteredExp.filter(e => e.type === 'Asset').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const activeAssetsCount = assets.filter(a => ['In Stock', 'In Use', 'Active'].includes(a.status)).length;
+
+    // Group by category
+    const catMap = new Map<string, number>();
+    filteredExp.forEach(e => {
+      catMap.set(e.category, (catMap.get(e.category) || 0) + Number(e.amount || 0));
+    });
+    const categorySpending = Array.from(catMap.entries()).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+
+    // Group by vendor
+    const vendorMap = new Map<string, number>();
+    filteredExp.forEach(e => {
+      vendorMap.set(e.vendor, (vendorMap.get(e.vendor) || 0) + Number(e.amount || 0));
+    });
+    const vendorSpending = Array.from(vendorMap.entries()).map(([vendor, total]) => ({ vendor, total })).sort((a, b) => b.total - a.total).slice(0, 5);
+
+    // Group by type
+    const typeMap = new Map<string, number>();
+    filteredExp.forEach(e => {
+      typeMap.set(e.type, (typeMap.get(e.type) || 0) + Number(e.amount || 0));
+    });
+    const typeSpending = Array.from(typeMap.entries()).map(([type, total]) => ({ type, total })).sort((a, b) => b.total - a.total);
+
+    // Group by month
+    const monthMap = new Map<string, number>();
+    filteredExp.forEach(e => {
+      const month = e.payment_date.substring(0, 7);
+      monthMap.set(month, (monthMap.get(month) || 0) + Number(e.amount || 0));
+    });
+    const monthlySpending = Array.from(monthMap.entries()).map(([month, total]) => ({ month, total })).sort((a, b) => a.month.localeCompare(b.month));
+
+    // Asset allocation by department
+    const deptMap = new Map<string, number>();
+    assets.forEach(a => {
+      const dept = a.department || 'Unassigned';
+      deptMap.set(dept, (deptMap.get(dept) || 0) + 1);
+    });
+    const assetAllocationByDepartment = Array.from(deptMap.entries()).map(([department, count]) => ({ department, count })).sort((a, b) => b.count - a.count);
+
+    // Asset allocation by location
+    const locMap = new Map<string, number>();
+    assets.forEach(a => {
+      const loc = a.location || 'Unassigned';
+      locMap.set(loc, (locMap.get(loc) || 0) + 1);
+    });
+    const assetAllocationByLocation = Array.from(locMap.entries()).map(([location, count]) => ({ location, count })).sort((a, b) => b.count - a.count);
+
+    setStats({
+      monthlySpending,
+      categorySpending,
+      vendorSpending,
+      typeSpending,
+      assetAllocationByDepartment,
+      assetAllocationByLocation,
+      summary: {
+        totalSpending,
+        totalCount: filteredExp.length,
+        totalOpEx,
+        totalCapEx,
+        activeAssetsCount
+      }
+    });
+  }, [expenses, assets, dashboardFilters]);
+
+  const logActivity = async (action_type: string, entity_type: string, description: string) => {
+    if (!user) return;
     try {
-      const statsQuery = new URLSearchParams(filters).toString();
-      const [expRes, assetRes, licenseRes, statsRes, activityRes] = await Promise.all([
-        fetch('/api/expenses'),
-        fetch('/api/assets'),
-        fetch('/api/licenses'),
-        fetch(`/api/stats?${statsQuery}`),
-        fetch('/api/activities')
-      ]);
-      setExpenses(await expRes.json());
-      setAssets(await assetRes.json());
-      setLicenses(await licenseRes.json());
-      setStats(await statsRes.json());
-      setActivities(await activityRes.json());
+      await addDoc(collection(db, 'system_activities'), {
+        action_type,
+        entity_type,
+        description,
+        timestamp: new Date().toISOString(),
+        userId: user.uid
+      });
     } catch (error) {
-      console.error("Fetch error:", error);
-    } finally {
-      setLoading(false);
+      console.error("Activity logging error:", error);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [dashboardFilters]);
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter(exp => {
+      const matchesSearch = 
+        exp.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        exp.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        exp.category.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesType = filterType === 'All' || exp.type === filterType;
+      return matchesSearch && matchesType;
+    });
+  }, [expenses, searchTerm, filterType]);
+
+  const filteredAssets = useMemo(() => {
+    return assets.filter(asset => {
+      const matchesSearch = 
+        asset.asset_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        asset.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (asset.serial_number && asset.serial_number.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (asset.assigned_to && asset.assigned_to.toLowerCase().includes(searchTerm.toLowerCase()));
+      const matchesStatus = assetStatusFilter === 'All' || asset.status === assetStatusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [assets, searchTerm, assetStatusFilter]);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="animate-spin text-slate-400" size={32} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Key size={32} />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">IT Asset Manager</h2>
+          <p className="text-slate-600 mb-8">Sign in to manage your organization's IT assets, expenses, and licenses securely.</p>
+          <Button onClick={signIn} className="w-full h-12 text-base">
+            Sign in with Google
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -347,6 +512,9 @@ export default function App() {
       // 1. Upload to get extracted text
       const uploadRes = await fetch('/api/upload', {
         method: 'POST',
+        headers: {
+          'Accept': 'application/json'
+        },
         body: formData
       });
       
@@ -411,18 +579,39 @@ export default function App() {
       const records = JSON.parse(response.text);
 
       // 3. Save records to backend
-      const saveRes = await fetch('/api/expenses/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ records })
-      });
-
-      if (saveRes.ok) {
-        const data = await saveRes.json();
-        setUploadSuccess(`Successfully imported ${data.records.length} records!`);
-        setTimeout(() => setUploadSuccess(null), 5000);
-        await fetchData();
+      if (!user) {
+        throw new Error("User not authenticated");
       }
+      const batch = writeBatch(db);
+      records.forEach((record: any) => {
+        const expenseRef = doc(collection(db, 'expenses'));
+        batch.set(expenseRef, {
+          ...record,
+          userId: user.uid,
+          createdAt: new Date().toISOString()
+        });
+
+        if (record.type === 'Asset') {
+          const assetRef = doc(collection(db, 'assets'));
+          batch.set(assetRef, {
+            expense_id: expenseRef.id,
+            asset_name: record.description,
+            status: 'In Stock',
+            assigned_to: '',
+            category: record.category,
+            vendor: record.vendor,
+            cost: record.amount,
+            purchase_date: record.payment_date,
+            userId: user.uid,
+            createdAt: new Date().toISOString()
+          });
+        }
+      });
+      await batch.commit();
+      await logActivity('ADD', 'Bulk Import', `Imported ${records.length} records`);
+      
+      setUploadSuccess(`Successfully imported ${records.length} records!`);
+      setTimeout(() => setUploadSuccess(null), 5000);
     } catch (error) {
       console.error("Upload/Process error:", error);
       alert("Error processing file. Please check your API key and file format.");
@@ -433,59 +622,93 @@ export default function App() {
 
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     try {
-      const url = editingExpense ? `/api/expenses/${editingExpense.id}` : '/api/expenses';
-      const method = editingExpense ? 'PATCH' : 'POST';
-      const body = editingExpense ? editingExpense : newExpense;
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (res.ok) {
-        setShowExpenseModal(false);
-        setEditingExpense(null);
-        setNewExpense({
-          payment_date: format(new Date(), 'yyyy-MM-dd'),
-          type: 'Expense',
-          currency: 'Kyats',
-          user: '',
-          image_url: ''
+      if (editingExpense) {
+        await updateDoc(doc(db, 'expenses', editingExpense.id), {
+          ...editingExpense,
+          userId: user.uid
         });
-        await fetchData();
+        await logActivity('UPDATE', 'Expense', `Updated expense: ${editingExpense.vendor}`);
+      } else {
+        const batch = writeBatch(db);
+        const expenseRef = doc(collection(db, 'expenses'));
+        batch.set(expenseRef, {
+          ...newExpense,
+          userId: user.uid,
+          createdAt: new Date().toISOString()
+        });
+
+        if (newExpense.type === 'Asset') {
+          const assetRef = doc(collection(db, 'assets'));
+          batch.set(assetRef, {
+            expense_id: expenseRef.id,
+            asset_name: newExpense.description,
+            status: 'In Stock',
+            assigned_to: newExpense.user || '',
+            category: newExpense.category,
+            userId: user.uid,
+            createdAt: new Date().toISOString()
+          });
+        }
+        await batch.commit();
+        await logActivity('ADD', newExpense.type || 'Expense', `Added ${newExpense.type}: ${newExpense.vendor} - ${newExpense.description}`);
       }
+
+      setShowExpenseModal(false);
+      setEditingExpense(null);
+      setNewExpense({
+        payment_date: format(new Date(), 'yyyy-MM-dd'),
+        type: 'Expense',
+        currency: 'Kyats',
+        user: '',
+        image_url: ''
+      });
     } catch (error) {
       console.error("Save expense error:", error);
     }
   };
 
+  const generateAssetTag = (category: string) => {
+    const prefix = category ? category.substring(0, 3).toUpperCase() : 'AST';
+    const categoryAssets = assets.filter(a => a.category === category && a.asset_tag?.startsWith(`${prefix}-`));
+    let maxNumber = 0;
+    categoryAssets.forEach(a => {
+      const match = a.asset_tag?.match(new RegExp(`^${prefix}-(\\d+)$`));
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) {
+          maxNumber = num;
+        }
+      }
+    });
+    return `${prefix}-${(maxNumber + 1).toString().padStart(3, '0')}`;
+  };
+
   const handleAddAsset = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     try {
-      const url = '/api/assets';
-      const method = 'POST';
-      const body = newAsset;
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+      const assetTag = newAsset.asset_tag || generateAssetTag(newAsset.category || 'Hardware');
+      await addDoc(collection(db, 'assets'), {
+        ...newAsset,
+        asset_tag: assetTag,
+        userId: user.uid,
+        createdAt: new Date().toISOString()
       });
-      if (res.ok) {
-        setShowAssetModal(false);
-        setEditingAsset(null);
-        setNewAsset({
-          purchase_date: format(new Date(), 'yyyy-MM-dd'),
-          status: 'Active',
-          warranty_expiry: '',
-          department: '',
-          location: '',
-          user: '',
-          image_url: ''
-        });
-        await fetchData();
-      }
+      await logActivity('ADD', 'Asset', `Added asset: ${newAsset.asset_name}`);
+      setShowAssetModal(false);
+      setEditingAsset(null);
+      setNewAsset({
+        purchase_date: format(new Date(), 'yyyy-MM-dd'),
+        status: 'Active',
+        warranty_expiry: '',
+        department: '',
+        location: '',
+        user: '',
+        image_url: '',
+        category: 'Hardware'
+      });
     } catch (error) {
       console.error("Save asset error:", error);
     }
@@ -523,17 +746,14 @@ export default function App() {
 
   const handleUpdateAsset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingAsset) return;
+    if (!editingAsset || !user) return;
     try {
-      const res = await fetch(`/api/assets/${editingAsset.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingAsset)
+      await updateDoc(doc(db, 'assets', editingAsset.id), {
+        ...editingAsset,
+        userId: user.uid
       });
-      if (res.ok) {
-        setEditingAsset(null);
-        await fetchData();
-      }
+      await logActivity('UPDATE', 'Asset', `Updated asset: ${editingAsset.asset_name}`);
+      setEditingAsset(null);
     } catch (error) {
       console.error("Update asset error:", error);
     }
@@ -541,72 +761,69 @@ export default function App() {
 
   const handleSaveLicense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     try {
-      const url = editingLicense ? `/api/licenses/${editingLicense.id}` : '/api/licenses';
-      const method = editingLicense ? 'PATCH' : 'POST';
-      const body = editingLicense ? editingLicense : newLicense;
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      if (res.ok) {
-        setShowLicenseModal(false);
-        setEditingLicense(null);
-        setNewLicense({
-          start_date: format(new Date(), 'yyyy-MM-dd'),
-          end_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'),
-          status: 'Active',
-          currency: 'Kyats'
+      if (editingLicense) {
+        await updateDoc(doc(db, 'licenses', editingLicense.id), {
+          ...editingLicense,
+          userId: user.uid
         });
-        await fetchData();
+        await logActivity('UPDATE', 'License', `Updated license: ${editingLicense.software_name}`);
+      } else {
+        await addDoc(collection(db, 'licenses'), {
+          ...newLicense,
+          userId: user.uid,
+          createdAt: new Date().toISOString()
+        });
+        await logActivity('ADD', 'License', `Added license: ${newLicense.software_name}`);
       }
+
+      setShowLicenseModal(false);
+      setEditingLicense(null);
+      setNewLicense({
+        start_date: format(new Date(), 'yyyy-MM-dd'),
+        end_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'),
+        status: 'Active',
+        currency: 'Kyats'
+      });
     } catch (error) {
       console.error("Save license error:", error);
     }
   };
 
   const handleRenewLicense = async (license: License) => {
+    if (!user) return;
     const newEndDate = format(new Date(parseISO(license.end_date).setFullYear(parseISO(license.end_date).getFullYear() + 1)), 'yyyy-MM-dd');
     try {
-      const res = await fetch(`/api/licenses/${license.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          end_date: newEndDate,
-          status: 'Active'
-        })
+      await updateDoc(doc(db, 'licenses', license.id), {
+        end_date: newEndDate,
+        status: 'Active',
+        userId: user.uid
       });
-      if (res.ok) {
-        await fetchData();
-      }
+      await logActivity('UPDATE', 'License', `Renewed license: ${license.software_name}`);
     } catch (error) {
       console.error("Renew license error:", error);
     }
   };
 
-  const handleDeleteLicense = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this license?')) return;
+  const handleDeleteLicense = async (id: string) => {
+    if (!user) return;
     try {
-      const res = await fetch(`/api/licenses/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchData();
-      }
+      await deleteDoc(doc(db, 'licenses', id));
+      await logActivity('DELETE', 'License', `Deleted license ID: ${id}`);
     } catch (error) {
       console.error("Delete license error:", error);
     }
   };
 
   const fetchAssetHistory = async (asset: Asset) => {
+    if (!user) return;
     setHistoryAsset(asset);
     setLoadingHistory(true);
     try {
-      const res = await fetch(`/api/assets/${asset.id}/history`);
-      if (res.ok) {
-        setAssetHistory(await res.json());
-      }
+      const q = query(collection(db, 'asset_history'), where('asset_id', '==', asset.id), where('userId', '==', user.uid), orderBy('change_date', 'desc'));
+      const snapshot = await getDocs(q);
+      setAssetHistory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AssetHistory)));
     } catch (error) {
       console.error("Fetch history error:", error);
     } finally {
@@ -615,54 +832,42 @@ export default function App() {
   };
 
   const handleBulkDeleteAssets = async () => {
-    if (selectedAssetIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedAssetIds.length} assets?`)) return;
-
+    if (selectedAssetIds.length === 0 || !user) return;
     try {
-      const res = await fetch('/api/assets/delete-bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: selectedAssetIds })
+      const batch = writeBatch(db);
+      selectedAssetIds.forEach(id => {
+        batch.delete(doc(db, 'assets', id));
       });
-      if (res.ok) {
-        setSelectedAssetIds([]);
-        await fetchData();
-      }
+      await batch.commit();
+      await logActivity('DELETE', 'Asset', `Bulk deleted ${selectedAssetIds.length} assets`);
+      setSelectedAssetIds([]);
     } catch (error) {
       console.error("Bulk delete error:", error);
     }
   };
 
-  const toggleAssetSelection = (id: number) => {
+  const toggleAssetSelection = (id: string) => {
     setSelectedAssetIds(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
 
   const handleBulkDeleteExpenses = async () => {
-    if (selectedExpenseIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedExpenseIds.length} expenses?`)) return;
-
+    if (selectedExpenseIds.length === 0 || !user) return;
     try {
-      const res = await fetch('/api/expenses/delete-bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: selectedExpenseIds })
+      const batch = writeBatch(db);
+      selectedExpenseIds.forEach(id => {
+        batch.delete(doc(db, 'expenses', id));
       });
-      if (res.ok) {
-        setSelectedExpenseIds([]);
-        await fetchData();
-      } else {
-        const data = await res.json();
-        alert(`Failed to delete expenses: ${data.error || 'Unknown error'}`);
-      }
+      await batch.commit();
+      await logActivity('DELETE', 'Expense', `Bulk deleted ${selectedExpenseIds.length} expenses`);
+      setSelectedExpenseIds([]);
     } catch (error) {
       console.error("Bulk delete error:", error);
-      alert("Failed to delete expenses due to a network error.");
     }
   };
 
-  const toggleExpenseSelection = (id: number) => {
+  const toggleExpenseSelection = (id: string) => {
     setSelectedExpenseIds(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
@@ -670,10 +875,10 @@ export default function App() {
 
   const handleAssetActionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assetAction) return;
+    if (!assetAction || !user) return;
 
     const { type, assets: targetAssets } = assetAction;
-    let updateData: any = { action_note: `${type}: ${actionData.notes}` };
+    let updateData: any = {};
 
     switch (type) {
       case 'Check out':
@@ -709,49 +914,32 @@ export default function App() {
     }
 
     try {
-      const promises = targetAssets.map(asset => 
-        fetch(`/api/assets/${asset.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updateData)
-        })
-      );
-      
-      const results = await Promise.all(promises);
-      if (results.every(res => res.ok)) {
-        setShowActionModal(false);
-        setAssetAction(null);
-        setActionData({ assigned_to: '', location: '', department: '', notes: '' });
-        setSelectedAssetIds([]);
-        await fetchData();
-      }
+      const batch = writeBatch(db);
+      targetAssets.forEach(asset => {
+        batch.update(doc(db, 'assets', asset.id), {
+          ...updateData,
+          userId: user.uid
+        });
+        const historyRef = doc(collection(db, 'asset_history'));
+        batch.set(historyRef, {
+          asset_id: asset.id,
+          change_date: new Date().toISOString(),
+          status: updateData.status || asset.status,
+          assigned_to: updateData.assigned_to !== undefined ? updateData.assigned_to : asset.assigned_to,
+          notes: `${type}: ${actionData.notes}`,
+          userId: user.uid
+        });
+      });
+      await batch.commit();
+      await logActivity('UPDATE', 'Asset', `Performed ${type} on ${targetAssets.length} assets`);
+      setShowActionModal(false);
+      setAssetAction(null);
+      setActionData({ notes: '', assigned_to: '', location: '', department: '' });
+      setSelectedAssetIds([]);
     } catch (error) {
-      console.error("Asset action error:", error);
+      console.error("Action submit error:", error);
     }
   };
-
-  const filteredExpenses = useMemo(() => {
-    return expenses.filter(exp => {
-      const matchesSearch = 
-        exp.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        exp.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        exp.category.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesType = filterType === 'All' || exp.type === filterType;
-      return matchesSearch && matchesType;
-    });
-  }, [expenses, searchTerm, filterType]);
-
-  const filteredAssets = useMemo(() => {
-    return assets.filter(asset => {
-      const matchesSearch = 
-        asset.asset_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        asset.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (asset.serial_number && asset.serial_number.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (asset.assigned_to && asset.assigned_to.toLowerCase().includes(searchTerm.toLowerCase()));
-      const matchesStatus = assetStatusFilter === 'All' || asset.status === assetStatusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [assets, searchTerm, assetStatusFilter]);
 
   const exportToExcel = () => {
     const ws = xlsx.utils.json_to_sheet(expenses);
@@ -794,103 +982,114 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  const backupData = () => {
-    const data = {
-      expenses,
-      assets,
-      licenses,
-      version: '1.0',
-      exportedAt: new Date().toISOString()
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `it_inventory_backup_${format(new Date(), 'yyyy-MM-dd')}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const backupDatabase = async () => {
+  const backupData = async () => {
+    if (!user) return;
     try {
-      const response = await fetch('/api/backup/db');
-      if (!response.ok) throw new Error('Failed to download database');
-      const blob = await response.blob();
+      const collectionsToBackup = ['expenses', 'assets', 'licenses', 'asset_history', 'system_activities'];
+      const data: any = {
+        version: '1.0',
+        exportedAt: new Date().toISOString()
+      };
+
+      for (const col of collectionsToBackup) {
+        const q = query(collection(db, col), where('userId', '==', user.uid));
+        const snapshot = await getDocs(q);
+        data[col] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      }
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `it_inventory_backup_${format(new Date(), 'yyyy-MM-dd')}.db`;
+      link.download = `it_inventory_backup_${format(new Date(), 'yyyy-MM-dd')}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Backup error:', error);
-      alert('Failed to backup database');
+      alert('Failed to backup data');
     }
-  };
-
-  const handleRestoreDatabase = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!confirm('This will overwrite the entire database. Are you sure?')) return;
-
-    const formData = new FormData();
-    formData.append('db_file', file);
-
-    try {
-      const res = await fetch('/api/restore/db', {
-        method: 'POST',
-        body: formData
-      });
-      if (res.ok) {
-        alert('Database restored successfully!');
-        await fetchData();
-      } else {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Restore failed');
-      }
-    } catch (error: any) {
-      console.error('DB Restore error:', error);
-      alert(`Failed to restore database: ${error.message}`);
-    }
-    e.target.value = ''; // Reset input
   };
 
   const handleRestoreData = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!confirm('This will overwrite current data. Are you sure?')) return;
+    if (!file || !user) return;
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
-        const res = await fetch('/api/restore', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        if (res.ok) {
-          alert('Data restored successfully!');
-          await fetchData();
-        } else {
-          const errorData = await res.json();
-          throw new Error(errorData.error || 'Restore failed');
+        const batch = writeBatch(db);
+
+        // Delete existing data for user
+        const collections = ['expenses', 'assets', 'licenses', 'asset_history', 'system_activities'];
+        for (const col of collections) {
+          const q = query(collection(db, col), where('userId', '==', user.uid));
+          const snapshot = await getDocs(q);
+          snapshot.docs.forEach(doc => batch.delete(doc.ref));
         }
+
+        // Add new data
+        const collectionsToAdd = ['expenses', 'assets', 'licenses', 'asset_history', 'system_activities'];
+        for (const col of collectionsToAdd) {
+          if (data[col]) {
+            data[col].forEach((item: any) => {
+              // Remove id from item if it exists so Firestore generates a new one, or keep it if we want to preserve IDs.
+              // Let's keep the ID to preserve relationships.
+              const { id, ...itemData } = item;
+              const docRef = id ? doc(db, col, id) : doc(collection(db, col));
+              batch.set(docRef, { ...itemData, userId: user.uid });
+            });
+          }
+        }
+
+        await batch.commit();
+        await logActivity('RESTORE', 'System', 'Restored data from JSON backup');
       } catch (error: any) {
         console.error('Restore error:', error);
-        alert(`Failed to restore data: ${error.message}`);
       }
     };
     reader.readAsText(file);
     e.target.value = ''; // Reset input
   };
 
+  const compressImage = async (base64Str: string, maxWidth = 600, maxHeight = 600, quality = 0.5): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(base64Str);
+        }
+      };
+      img.onerror = () => resolve(base64Str);
+    });
+  };
+
   const generateAssetImage = async (asset: Asset) => {
+    if (!user) return;
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       const prompt = `A professional product photo of an IT asset: ${asset.asset_name}. Description: ${asset.vendor} ${asset.asset_name}. Clean studio lighting, white background.`;
@@ -916,14 +1115,11 @@ export default function App() {
       }
 
       if (base64Image) {
-        const res = await fetch(`/api/assets/${asset.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_url: base64Image })
+        const compressedImage = await compressImage(base64Image);
+        await updateDoc(doc(db, 'assets', asset.id), {
+          image_url: compressedImage,
+          userId: user.uid
         });
-        if (res.ok) {
-          await fetchData();
-        }
       }
     } catch (error) {
       console.error("Generate image error:", error);
@@ -932,6 +1128,7 @@ export default function App() {
   };
 
   const generateExpenseImage = async (expense: Expense) => {
+    if (!user) return;
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       const prompt = `A professional product photo of an IT item: ${expense.description}. Vendor: ${expense.vendor}. Clean studio lighting, white background.`;
@@ -957,14 +1154,11 @@ export default function App() {
       }
 
       if (base64Image) {
-        const res = await fetch(`/api/expenses/${expense.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_url: base64Image })
+        const compressedImage = await compressImage(base64Image);
+        await updateDoc(doc(db, 'expenses', expense.id), {
+          image_url: compressedImage,
+          userId: user.uid
         });
-        if (res.ok) {
-          await fetchData();
-        }
       }
     } catch (error) {
       console.error("Generate expense image error:", error);
@@ -972,27 +1166,22 @@ export default function App() {
     }
   };
 
-  const handleDeleteExpense = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this record?')) return;
+  const handleDeleteExpense = async (id: string) => {
+    if (!user) return;
     try {
-      const res = await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchData();
-      } else {
-        const data = await res.json();
-        alert(`Failed to delete expense: ${data.error || 'Unknown error'}`);
-      }
+      await deleteDoc(doc(db, 'expenses', id));
+      await logActivity('DELETE', 'Expense', `Deleted expense ID: ${id}`);
     } catch (error) {
       console.error("Delete expense error:", error);
       alert("Failed to delete expense due to a network error.");
     }
   };
 
-  const handleDeleteAsset = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this asset?')) return;
+  const handleDeleteAsset = async (id: string) => {
+    if (!user) return;
     try {
-      const res = await fetch(`/api/assets/${id}`, { method: 'DELETE' });
-      if (res.ok) await fetchData();
+      await deleteDoc(doc(db, 'assets', id));
+      await logActivity('DELETE', 'Asset', `Deleted asset ID: ${id}`);
     } catch (error) {
       console.error("Delete asset error:", error);
     }
@@ -1095,22 +1284,6 @@ export default function App() {
                 <input type="file" className="hidden" onChange={handleRestoreData} accept=".json" />
               </label>
             </div>
-            <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-2 mt-4">Database (.db)</div>
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="ghost" className="text-[10px] h-8 px-2" onClick={backupDatabase} icon={Download}>Backup</Button>
-              <label className="flex items-center justify-center gap-1 h-8 px-2 rounded-lg border border-slate-200 text-[10px] font-medium hover:bg-slate-50 cursor-pointer">
-                <History size={12} />
-                Restore
-                <input type="file" className="hidden" onChange={handleRestoreDatabase} accept=".db" />
-              </label>
-            </div>
-          </div>
-          
-          <div className="px-2">
-            <p className="text-[9px] text-slate-400 leading-tight">
-              <AlertCircle size={8} className="inline mr-1" />
-              Note: This preview environment is ephemeral. Use Backup/Restore to persist your data.
-            </p>
           </div>
         </div>
       </aside>
@@ -1974,6 +2147,55 @@ export default function App() {
               </Card>
             </div>
 
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <Card className="p-6">
+                <h3 className="font-bold text-lg mb-6">Asset Allocation by Department</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={stats?.assetAllocationByDepartment || []}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="count"
+                        nameKey="department"
+                      >
+                        {(stats?.assetAllocationByDepartment || []).map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        formatter={(v: number) => [`${v}`, 'Assets']}
+                      />
+                      <Legend verticalAlign="bottom" height={36} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              <Card className="p-6">
+                <h3 className="font-bold text-lg mb-6">Asset Allocation by Location</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={stats?.assetAllocationByLocation || []} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                      <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                      <YAxis dataKey="location" type="category" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} width={100} />
+                      <Tooltip 
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        formatter={(v: number) => [`${v}`, 'Assets']}
+                      />
+                      <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <Card className="p-6">
                 <h3 className="font-bold text-lg mb-6">Asset vs Expense</h3>
@@ -2163,6 +2385,16 @@ export default function App() {
               </button>
             </div>
             <form onSubmit={handleAddAsset} className="space-y-4">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-500 uppercase">Fixed Asset No.</span>
+                <input 
+                  type="text"
+                  className="font-mono font-bold text-slate-900 bg-white px-3 py-1.5 rounded shadow-sm border border-slate-200 focus:ring-2 focus:ring-slate-900 focus:outline-none w-48 text-right"
+                  value={newAsset.asset_tag || ''}
+                  onChange={e => setNewAsset({...newAsset, asset_tag: e.target.value})}
+                  placeholder="Auto-generated"
+                />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-slate-500 uppercase">Category</label>
@@ -2322,9 +2554,13 @@ export default function App() {
             <form onSubmit={handleUpdateAsset} className="space-y-4">
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-500 uppercase">Fixed Asset No.</span>
-                <span className="font-mono font-bold text-slate-900 bg-white px-2 py-1 rounded shadow-sm border border-slate-200">
-                  {editingAsset.asset_tag}
-                </span>
+                <input 
+                  type="text"
+                  className="font-mono font-bold text-slate-900 bg-white px-3 py-1.5 rounded shadow-sm border border-slate-200 focus:ring-2 focus:ring-slate-900 focus:outline-none w-48 text-right"
+                  value={editingAsset.asset_tag || ''}
+                  onChange={e => setEditingAsset({...editingAsset, asset_tag: e.target.value})}
+                  placeholder="Auto-generated"
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
