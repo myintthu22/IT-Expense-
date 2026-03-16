@@ -353,7 +353,6 @@ export default function App() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isSignUpMode, setIsSignUpMode] = useState(false);
 
   const [dashboardFilters, setDashboardFilters] = useState({
     startDate: '',
@@ -548,7 +547,7 @@ export default function App() {
           </div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2 text-center">IT Asset Manager</h2>
           <p className="text-slate-600 mb-8 text-center">
-            {isSignUpMode ? "Create a new user account." : "Sign in to manage your organization's IT assets, expenses, and licenses."}
+            Sign in to manage your organization's IT assets, expenses, and licenses.
           </p>
           
           {loginError && (
@@ -565,11 +564,7 @@ export default function App() {
             const email = `${loginUsername.toLowerCase().trim()}@itexpense.local`;
             
             try {
-              if (isSignUpMode) {
-                await signUp(email, loginPassword);
-              } else {
-                await login(email, loginPassword);
-              }
+              await login(email, loginPassword);
             } catch (err: any) {
               if (err.code === 'auth/invalid-credential') {
                 setLoginError('Invalid username or password.');
@@ -605,21 +600,9 @@ export default function App() {
               />
             </div>
             <Button type="submit" className="w-full h-12 text-base mt-2">
-              {isSignUpMode ? "Create User" : "Sign In"}
+              Sign In
             </Button>
           </form>
-
-          <div className="mt-6 text-center">
-            <button 
-              onClick={() => {
-                setIsSignUpMode(!isSignUpMode);
-                setLoginError('');
-              }}
-              className="text-sm text-slate-500 hover:text-slate-800 transition-colors"
-            >
-              {isSignUpMode ? "Back to Sign In" : "Need to create a user? (Admin Only)"}
-            </button>
-          </div>
         </div>
       </div>
     );
