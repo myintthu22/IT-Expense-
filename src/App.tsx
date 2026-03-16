@@ -839,9 +839,9 @@ export default function App() {
 
   const generateAssetTag = (category: string) => {
     const prefix = category ? category.substring(0, 3).toUpperCase() : 'AST';
-    const categoryAssets = assets.filter(a => a.category === category && a.asset_tag?.startsWith(`${prefix}-`));
+    const prefixAssets = assets.filter(a => a.asset_tag?.startsWith(`${prefix}-`));
     let maxNumber = 0;
-    categoryAssets.forEach(a => {
+    prefixAssets.forEach(a => {
       const match = a.asset_tag?.match(new RegExp(`^${prefix}-(\\d+)$`));
       if (match) {
         const num = parseInt(match[1], 10);
@@ -1511,6 +1511,11 @@ export default function App() {
             ) : activeTab === 'assets' ? (
               <Button icon={Plus} onClick={() => {
                 setEditingAsset(null);
+                setNewAsset(prev => ({
+                  ...prev,
+                  category: 'Hardware',
+                  asset_tag: generateAssetTag('Hardware')
+                }));
                 setShowAssetModal(true);
               }}>Add Asset</Button>
             ) : (
@@ -2215,7 +2220,14 @@ export default function App() {
               </Card>
             ))}
             <button 
-              onClick={() => setShowAssetModal(true)}
+              onClick={() => {
+                setNewAsset(prev => ({
+                  ...prev,
+                  category: 'Hardware',
+                  asset_tag: generateAssetTag('Hardware')
+                }));
+                setShowAssetModal(true);
+              }}
               className="border-2 border-dashed border-slate-200 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-slate-300 hover:text-slate-500 transition-all group"
             >
               <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-slate-100 transition-all">
@@ -2635,7 +2647,8 @@ export default function App() {
                   location: '',
                   user: '',
                   image_url: '',
-                  category: 'Hardware'
+                  category: 'Hardware',
+                  asset_tag: ''
                 });
               }} className="text-slate-400 hover:text-slate-600">
                 <X size={24} />
@@ -2658,7 +2671,14 @@ export default function App() {
                   <select 
                     className="w-full px-4 py-2 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900"
                     value={newAsset.category || 'Hardware'}
-                    onChange={e => setNewAsset({...newAsset, category: e.target.value})}
+                    onChange={e => {
+                      const newCategory = e.target.value;
+                      setNewAsset({
+                        ...newAsset, 
+                        category: newCategory,
+                        asset_tag: generateAssetTag(newCategory)
+                      });
+                    }}
                   >
                     <option value="Laptop">Laptop</option>
                     <option value="Hardware">Hardware</option>
@@ -2705,11 +2725,15 @@ export default function App() {
                   onChange={e => {
                     const val = e.target.value;
                     const suggested = autoClassifyExpense(newAsset.vendor || '', val);
-                    setNewAsset(prev => ({
-                      ...prev,
-                      asset_name: val,
-                      category: (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category
-                    }));
+                    setNewAsset(prev => {
+                      const newCategory = (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category;
+                      return {
+                        ...prev,
+                        asset_name: val,
+                        category: newCategory,
+                        asset_tag: newCategory !== prev.category ? generateAssetTag(newCategory || 'Hardware') : prev.asset_tag
+                      };
+                    });
                   }}
                 />
               </div>
@@ -2724,11 +2748,15 @@ export default function App() {
                   onChange={e => {
                     const val = e.target.value;
                     const suggested = autoClassifyExpense(val, newAsset.asset_name || '');
-                    setNewAsset(prev => ({
-                      ...prev,
-                      vendor: val,
-                      category: (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category
-                    }));
+                    setNewAsset(prev => {
+                      const newCategory = (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category;
+                      return {
+                        ...prev,
+                        vendor: val,
+                        category: newCategory,
+                        asset_tag: newCategory !== prev.category ? generateAssetTag(newCategory || 'Hardware') : prev.asset_tag
+                      };
+                    });
                   }}
                 />
               </div>
