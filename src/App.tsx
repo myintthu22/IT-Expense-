@@ -247,6 +247,37 @@ const ActionMenuItem = ({ icon: Icon, label, onClick, variant = 'default' }: { i
   </button>
 );
 
+const autoClassifyExpense = (vendor: string, description: string): string => {
+  const text = `${vendor} ${description}`.toLowerCase();
+  
+  if (text.includes('laptop') || text.includes('macbook') || text.includes('thinkpad') || text.includes('dell xps') || text.includes('surface pro')) {
+    return 'Laptop';
+  }
+  if (text.includes('printer') || text.includes('toner') || text.includes('ink') || text.includes('cartridge') || text.includes('epson') || text.includes('brother') || text.includes('canon')) {
+    if (text.includes('service') || text.includes('repair') || text.includes('maintenance')) {
+      return 'Printer service';
+    }
+    return 'Printer and Toner consumable';
+  }
+  if (text.includes('software') || text.includes('subscription') || text.includes('license') || text.includes('adobe') || text.includes('microsoft 365') || text.includes('aws') || text.includes('cloud') || text.includes('azure') || text.includes('gcp') || text.includes('google workspace') || text.includes('slack') || text.includes('zoom') || text.includes('github') || text.includes('atlassian')) {
+    return 'Software';
+  }
+  if (text.includes('internet') || text.includes('wifi') || text.includes('broadband') || text.includes('router') || text.includes('isp') || text.includes('comcast') || text.includes('verizon') || text.includes('at&t') || text.includes('spectrum') || text.includes('starlink')) {
+    return 'Internet';
+  }
+  if (text.includes('maintenance') || text.includes('repair') || text.includes('service') || text.includes('fix') || text.includes('plumbing') || text.includes('electrical') || text.includes('cleaning')) {
+    return 'Maintenance';
+  }
+  if (text.includes('office') || text.includes('paper') || text.includes('pen') || text.includes('desk') || text.includes('chair') || text.includes('stationery') || text.includes('staples') || text.includes('ikea')) {
+    return 'Office Supplies';
+  }
+  if (text.includes('hardware') || text.includes('monitor') || text.includes('keyboard') || text.includes('mouse') || text.includes('cable') || text.includes('adapter') || text.includes('server') || text.includes('cisco') || text.includes('ubiquiti') || text.includes('switch') || text.includes('router')) {
+    return 'Hardware';
+  }
+  
+  return '';
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses' | 'assets' | 'licenses' | 'analytics' | 'activities'>('dashboard');
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -263,6 +294,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'All' | 'Asset' | 'Expense'>('All');
+  const [filterPaymentMethod, setFilterPaymentMethod] = useState<string>('All');
   const [assetStatusFilter, setAssetStatusFilter] = useState<string>('All');
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]);
@@ -366,25 +398,32 @@ export default function App() {
 
     // Filter expenses based on dashboardFilters
     let filteredExp = expenses;
+    let filteredAssets = assets;
+    
     if (dashboardFilters.startDate) {
       filteredExp = filteredExp.filter(e => e.payment_date >= dashboardFilters.startDate);
+      filteredAssets = filteredAssets.filter(a => (a.purchase_date || '') >= dashboardFilters.startDate);
     }
     if (dashboardFilters.endDate) {
       filteredExp = filteredExp.filter(e => e.payment_date <= dashboardFilters.endDate);
+      filteredAssets = filteredAssets.filter(a => (a.purchase_date || '') <= dashboardFilters.endDate);
     }
     if (dashboardFilters.category !== 'All') {
-      filteredExp = filteredExp.filter(e => e.category === dashboardFilters.category);
+      const selectedCategory = dashboardFilters.category.toLowerCase();
+      filteredExp = filteredExp.filter(e => e.category?.toLowerCase() === selectedCategory);
+      filteredAssets = filteredAssets.filter(a => a.category?.toLowerCase() === selectedCategory);
     }
 
     const totalSpending = filteredExp.reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const totalOpEx = filteredExp.filter(e => e.type === 'Expense').reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const totalCapEx = filteredExp.filter(e => e.type === 'Asset').reduce((sum, e) => sum + Number(e.amount || 0), 0);
-    const activeAssetsCount = assets.filter(a => ['In Stock', 'In Use', 'Active'].includes(a.status)).length;
+    const activeAssetsCount = filteredAssets.filter(a => ['In Stock', 'In Use', 'Active', 'Leased', 'Reserved'].includes(a.status)).length;
 
     // Group by category
     const catMap = new Map<string, number>();
     filteredExp.forEach(e => {
-      catMap.set(e.category, (catMap.get(e.category) || 0) + Number(e.amount || 0));
+      const cat = e.category ? (e.category.charAt(0).toUpperCase() + e.category.slice(1).toLowerCase()) : 'Other';
+      catMap.set(cat, (catMap.get(cat) || 0) + Number(e.amount || 0));
     });
     const categorySpending = Array.from(catMap.entries()).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
 
@@ -412,7 +451,7 @@ export default function App() {
 
     // Asset allocation by department
     const deptMap = new Map<string, number>();
-    assets.forEach(a => {
+    filteredAssets.forEach(a => {
       const dept = a.department || 'Unassigned';
       deptMap.set(dept, (deptMap.get(dept) || 0) + 1);
     });
@@ -420,7 +459,7 @@ export default function App() {
 
     // Asset allocation by location
     const locMap = new Map<string, number>();
-    assets.forEach(a => {
+    filteredAssets.forEach(a => {
       const loc = a.location || 'Unassigned';
       locMap.set(loc, (locMap.get(loc) || 0) + 1);
     });
@@ -465,9 +504,10 @@ export default function App() {
         exp.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
         exp.category.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesType = filterType === 'All' || exp.type === filterType;
-      return matchesSearch && matchesType;
+      const matchesPaymentMethod = filterPaymentMethod === 'All' || exp.payment_method === filterPaymentMethod;
+      return matchesSearch && matchesType && matchesPaymentMethod;
     });
-  }, [expenses, searchTerm, filterType]);
+  }, [expenses, searchTerm, filterType, filterPaymentMethod]);
 
   const filteredAssets = useMemo(() => {
     return assets.filter(asset => {
@@ -591,8 +631,15 @@ export default function App() {
         const worksheet = workbook.Sheets[firstSheetName];
         extractedText = xlsx.utils.sheet_to_csv(worksheet);
       } else if (file.name.endsWith('.pdf')) {
-        const buffer = await file.arrayBuffer();
-        const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            resolve(dataUrl.split(',')[1]);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
         inlineData = {
           data: base64,
           mimeType: 'application/pdf'
@@ -1014,9 +1061,9 @@ export default function App() {
         batch.set(historyRef, {
           asset_id: asset.id,
           change_date: new Date().toISOString(),
-          status: updateData.status || asset.status,
-          assigned_to: updateData.assigned_to !== undefined ? updateData.assigned_to : asset.assigned_to,
-          notes: `${type}: ${actionData.notes}`,
+          status: updateData.status || asset.status || 'Unknown',
+          assigned_to: updateData.assigned_to !== undefined ? updateData.assigned_to : (asset.assigned_to || ''),
+          notes: `${type}: ${actionData.notes || ''}`,
           userId: user.uid
         });
       });
@@ -1536,7 +1583,7 @@ export default function App() {
                 color="bg-amber-500"
               />
               <StatCard 
-                label={dashboardFilters.category !== 'All' ? `Total ${dashboardFilters.category}` : "Active Assets"} 
+                label={dashboardFilters.category !== 'All' ? `Active ${dashboardFilters.category}` : "Active Assets"} 
                 value={(stats?.summary?.activeAssetsCount || 0).toString()} 
                 trend="+3" 
                 icon={Package} 
@@ -1681,6 +1728,18 @@ export default function App() {
                   <option value="All">All Types</option>
                   <option value="Asset">Assets</option>
                   <option value="Expense">Expenses</option>
+                </select>
+                <select 
+                  className="bg-slate-50 border-none text-sm font-medium rounded-xl focus:ring-2 focus:ring-slate-900"
+                  value={filterPaymentMethod}
+                  onChange={(e) => setFilterPaymentMethod(e.target.value)}
+                >
+                  <option value="All">All Payment Methods</option>
+                  <option value="Cash">Cash</option>
+                  <option value="Credit Card">Credit Card</option>
+                  <option value="Transfer">Transfer</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Other">Other</option>
                 </select>
                 <Button variant="outline" icon={Download} onClick={exportToPDF}>PDF Report</Button>
               </div>
@@ -2395,7 +2454,20 @@ export default function App() {
                   placeholder="e.g. Amazon, Microsoft, etc."
                   className="w-full px-4 py-2 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900"
                   value={newExpense.vendor}
-                  onChange={e => setNewExpense({...newExpense, vendor: e.target.value})}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const suggested = autoClassifyExpense(val, newExpense.description || '');
+                    setNewExpense(prev => {
+                      const newCategory = (!prev.category || prev.category === 'Other') && suggested ? suggested : prev.category;
+                      const newType = (newCategory === 'Laptop' || newCategory === 'Hardware') ? 'Asset' : (newCategory ? 'Expense' : prev.type);
+                      return {
+                        ...prev,
+                        vendor: val,
+                        category: newCategory,
+                        type: newType as any
+                      };
+                    });
+                  }}
                 />
               </div>
               <div className="space-y-1">
@@ -2405,7 +2477,20 @@ export default function App() {
                   placeholder="What was this for?"
                   className="w-full px-4 py-2 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900 h-20"
                   value={newExpense.description}
-                  onChange={e => setNewExpense({...newExpense, description: e.target.value})}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const suggested = autoClassifyExpense(newExpense.vendor || '', val);
+                    setNewExpense(prev => {
+                      const newCategory = (!prev.category || prev.category === 'Other') && suggested ? suggested : prev.category;
+                      const newType = (newCategory === 'Laptop' || newCategory === 'Hardware') ? 'Asset' : (newCategory ? 'Expense' : prev.type);
+                      return {
+                        ...prev,
+                        description: val,
+                        category: newCategory,
+                        type: newType as any
+                      };
+                    });
+                  }}
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -2542,7 +2627,15 @@ export default function App() {
                   placeholder="e.g. MacBook Pro M3"
                   className="w-full px-4 py-2 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900"
                   value={newAsset.asset_name}
-                  onChange={e => setNewAsset({...newAsset, asset_name: e.target.value})}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const suggested = autoClassifyExpense(newAsset.vendor || '', val);
+                    setNewAsset(prev => ({
+                      ...prev,
+                      asset_name: val,
+                      category: (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category
+                    }));
+                  }}
                 />
               </div>
               <div className="space-y-1">
@@ -2553,7 +2646,15 @@ export default function App() {
                   placeholder="e.g. Apple"
                   className="w-full px-4 py-2 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900"
                   value={newAsset.vendor}
-                  onChange={e => setNewAsset({...newAsset, vendor: e.target.value})}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const suggested = autoClassifyExpense(val, newAsset.asset_name || '');
+                    setNewAsset(prev => ({
+                      ...prev,
+                      vendor: val,
+                      category: (!prev.category || prev.category === 'Hardware') && suggested ? suggested : prev.category
+                    }));
+                  }}
                 />
               </div>
               <div className="space-y-1">

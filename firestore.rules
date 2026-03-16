@@ -43,7 +43,7 @@ service cloud.firestore {
     function isValidAssetHistory(data) {
       return data.asset_id is string && data.asset_id.size() < 100 &&
              data.status is string && data.status.size() < 100 &&
-             data.timestamp is string && data.timestamp.size() < 50 &&
+             data.change_date is string && data.change_date.size() < 50 &&
              data.userId is string && data.userId.size() < 100;
     }
     
@@ -96,7 +96,7 @@ service cloud.firestore {
     match /asset_history/{historyId} {
       allow read: if isDocOwner();
       allow create: if isAuthenticated() && 
-                    hasRequiredFields(['asset_id', 'status', 'timestamp', 'userId']) &&
+                    hasRequiredFields(['asset_id', 'status', 'change_date', 'userId']) &&
                     isValidAssetHistory(request.resource.data) && 
                     uidUnchanged();
       allow update: if isDocOwner() && 
