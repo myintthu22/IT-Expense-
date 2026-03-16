@@ -62,7 +62,8 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI, Type } from "@google/genai";
 import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, writeBatch, serverTimestamp, getDocs } from 'firebase/firestore';
-import { db } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from './firebase';
 import { useFirebase } from './components/FirebaseProvider';
 
 const EXCHANGE_RATE = 4500; // 1 USD = 4500 Kyats
@@ -98,6 +99,8 @@ interface Expense {
   type: 'Asset' | 'Expense';
   user?: string;
   image_url?: string;
+  attachment_url?: string;
+  attachment_name?: string;
 }
 
 interface Asset {
@@ -163,6 +166,8 @@ interface Activity {
   entity_type: string;
   description: string;
   timestamp: string;
+  user_name?: string;
+  user_email?: string;
 }
 
 // Components
@@ -287,6 +292,7 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
@@ -321,7 +327,9 @@ export default function App() {
     type: 'Expense',
     currency: 'Kyats',
     user: '',
-    image_url: ''
+    image_url: '',
+    attachment_url: '',
+    attachment_name: ''
   });
   const [newAsset, setNewAsset] = useState<Partial<Asset>>({
     purchase_date: format(new Date(), 'yyyy-MM-dd'),
@@ -490,7 +498,9 @@ export default function App() {
         entity_type,
         description,
         timestamp: new Date().toISOString(),
-        userId: user.uid
+        userId: user.uid,
+        user_name: user.displayName || 'Unknown User',
+        user_email: user.email || 'Unknown Email'
       });
     } catch (error) {
       console.error("Activity logging error:", error);
@@ -614,6 +624,25 @@ export default function App() {
       </div>
     );
   }
+
+  const handleAttachmentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setUploadingAttachment(true);
+    try {
+      const storageRef = ref(storage, `attachments/${user.uid}/${Date.now()}_${file.name}`);
+      await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      setNewExpense(prev => ({ ...prev, attachment_url: downloadURL, attachment_name: file.name }));
+    } catch (error) {
+      console.error("Error uploading attachment:", error);
+      alert("Failed to upload attachment.");
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -799,7 +828,9 @@ export default function App() {
         type: 'Expense',
         currency: 'Kyats',
         user: '',
-        image_url: ''
+        image_url: '',
+        attachment_url: '',
+        attachment_name: ''
       });
     } catch (error) {
       console.error("Save expense error:", error);
@@ -1672,6 +1703,7 @@ export default function App() {
                       <th className="px-6 py-4 font-semibold">Amount</th>
                       <th className="px-6 py-4 font-semibold">USD</th>
                       <th className="px-6 py-4 font-semibold">Type</th>
+                      <th className="px-6 py-4 font-semibold">Attachment</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1695,6 +1727,16 @@ export default function App() {
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={exp.type === 'Asset' ? 'info' : 'default'}>{exp.type}</Badge>
+                        </td>
+                        <td className="px-6 py-4">
+                          {exp.attachment_url ? (
+                            <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-medium" title={exp.attachment_name}>
+                              <FileText size={16} />
+                              View
+                            </a>
+                          ) : (
+                            <span className="text-slate-400 text-xs">-</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1774,6 +1816,7 @@ export default function App() {
                       <th className="px-6 py-4 font-semibold">USD</th>
                       <th className="px-6 py-4 font-semibold">Method</th>
                       <th className="px-6 py-4 font-semibold">Type</th>
+                      <th className="px-6 py-4 font-semibold">Attachment</th>
                       <th className="px-6 py-4 font-semibold">Actions</th>
                     </tr>
                   </thead>
@@ -1809,6 +1852,16 @@ export default function App() {
                         <td className="px-6 py-4 text-sm text-slate-500">{exp.payment_method}</td>
                         <td className="px-6 py-4">
                           <Badge variant={exp.type === 'Asset' ? 'info' : 'default'}>{exp.type}</Badge>
+                        </td>
+                        <td className="px-6 py-4">
+                          {exp.attachment_url ? (
+                            <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-medium" title={exp.attachment_name}>
+                              <FileText size={16} />
+                              View
+                            </a>
+                          ) : (
+                            <span className="text-slate-400 text-xs">-</span>
+                          )}
                         </td>
                         <td className="px-6 py-4 flex items-center gap-1">
                           <button 
@@ -1863,6 +1916,7 @@ export default function App() {
                   <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
                     <tr>
                       <th className="px-6 py-4 font-semibold">Time</th>
+                      <th className="px-6 py-4 font-semibold">User</th>
                       <th className="px-6 py-4 font-semibold">Action</th>
                       <th className="px-6 py-4 font-semibold">Entity</th>
                       <th className="px-6 py-4 font-semibold">Description</th>
@@ -1873,6 +1927,9 @@ export default function App() {
                       <tr key={activity.id} className="hover:bg-slate-50 transition-colors">
                         <td className="px-6 py-4 text-sm font-medium whitespace-nowrap">
                           {format(parseISO(activity.timestamp), 'MMM dd, HH:mm:ss')}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-slate-600">
+                          {activity.user_name || activity.user_email || 'System'}
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={
@@ -1891,7 +1948,7 @@ export default function App() {
                     ))}
                     {activities.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                        <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
                           No activities logged yet.
                         </td>
                       </tr>
@@ -2416,7 +2473,9 @@ export default function App() {
                   type: 'Expense',
                   currency: 'Kyats',
                   user: '',
-                  image_url: ''
+                  image_url: '',
+                  attachment_url: '',
+                  attachment_name: ''
                 });
               }} className="text-slate-400 hover:text-slate-600">
                 <X size={24} />
@@ -2536,8 +2595,24 @@ export default function App() {
                   onChange={e => setNewExpense({...newExpense, user: e.target.value})}
                 />
               </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Attachment (PDF/Image)</label>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="file" 
+                    accept=".pdf,image/*"
+                    onChange={handleAttachmentUpload}
+                    disabled={uploadingAttachment}
+                    className="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
+                  />
+                  {uploadingAttachment && <Loader2 className="animate-spin text-slate-400" size={20} />}
+                </div>
+                {newExpense.attachment_name && (
+                  <p className="text-xs text-emerald-600 mt-1">Uploaded: {newExpense.attachment_name}</p>
+                )}
+              </div>
               <div className="pt-4">
-                <Button type="submit" className="w-full py-3">Save Record</Button>
+                <Button type="submit" className="w-full py-3" disabled={uploadingAttachment}>Save Record</Button>
               </div>
             </form>
           </Card>
