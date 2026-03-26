@@ -85,6 +85,11 @@ const formatDate = (dateStr: string | undefined | null, formatStr: string = 'MMM
   }
 };
 
+const formatUserEmail = (email: string | undefined | null) => {
+  if (!email || email === 'Unknown') return '-';
+  return email.replace('@itexpense.local', '');
+};
+
 // Types
 interface Expense {
   id: string;
@@ -101,6 +106,7 @@ interface Expense {
   image_url?: string;
   attachment_url?: string;
   attachment_name?: string;
+  created_by_email?: string;
 }
 
 interface Asset {
@@ -120,6 +126,7 @@ interface Asset {
   image_url?: string;
   asset_tag?: string;
   category?: string;
+  created_by_email?: string;
 }
 
 interface AssetHistory {
@@ -142,6 +149,7 @@ interface License {
   currency: string;
   status: string;
   assigned_to: string;
+  created_by_email?: string;
 }
 
 interface Stats {
@@ -301,6 +309,8 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'All' | 'Asset' | 'Expense'>('All');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState<string>('All');
+  const [expenseStartDate, setExpenseStartDate] = useState<string>('');
+  const [expenseEndDate, setExpenseEndDate] = useState<string>('');
   const [assetStatusFilter, setAssetStatusFilter] = useState<string>('All');
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]);
@@ -514,9 +524,11 @@ export default function App() {
         exp.category.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesType = filterType === 'All' || exp.type === filterType;
       const matchesPaymentMethod = filterPaymentMethod === 'All' || exp.payment_method === filterPaymentMethod;
-      return matchesSearch && matchesType && matchesPaymentMethod;
+      const matchesStartDate = !expenseStartDate || exp.payment_date >= expenseStartDate;
+      const matchesEndDate = !expenseEndDate || exp.payment_date <= expenseEndDate;
+      return matchesSearch && matchesType && matchesPaymentMethod && matchesStartDate && matchesEndDate;
     });
-  }, [expenses, searchTerm, filterType, filterPaymentMethod]);
+  }, [expenses, searchTerm, filterType, filterPaymentMethod, expenseStartDate, expenseEndDate]);
 
   const filteredAssets = useMemo(() => {
     return assets.filter(asset => {
@@ -545,9 +557,19 @@ export default function App() {
           <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
             <Key size={32} />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2 text-center">IT Asset Manager</h2>
+          <div className="flex justify-center mb-4">
+            <img 
+              src="/logo.png" 
+              alt="Marga Group Logo" 
+              className="h-20 object-contain" 
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }} 
+            />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2 text-center">IT Daily Expense</h2>
           <p className="text-slate-600 mb-8 text-center">
-            Sign in to manage your organization's IT assets, expenses, and licenses.
+            Sign in to manage your organization's IT daily expenses, assets, and licenses.
           </p>
           
           {loginError && (
@@ -737,7 +759,8 @@ export default function App() {
         batch.set(expenseRef, {
           ...record,
           userId: user.uid,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          created_by_email: user.email || 'Unknown'
         });
 
         if (record.type === 'Asset') {
@@ -752,7 +775,8 @@ export default function App() {
             cost: record.amount,
             purchase_date: record.payment_date,
             userId: user.uid,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            created_by_email: user.email || 'Unknown'
           });
         }
       });
@@ -775,17 +799,18 @@ export default function App() {
     try {
       if (editingExpense) {
         await updateDoc(doc(db, 'expenses', editingExpense.id), {
-          ...editingExpense,
+          ...newExpense,
           userId: user.uid
         });
-        await logActivity('UPDATE', 'Expense', `Updated expense: ${editingExpense.vendor}`);
+        await logActivity('UPDATE', 'Expense', `Updated expense: ${newExpense.vendor}`);
       } else {
         const batch = writeBatch(db);
         const expenseRef = doc(collection(db, 'expenses'));
         batch.set(expenseRef, {
           ...newExpense,
           userId: user.uid,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          created_by_email: user.email || 'Unknown'
         });
 
         if (newExpense.type === 'Asset') {
@@ -797,7 +822,8 @@ export default function App() {
             assigned_to: newExpense.user || '',
             category: newExpense.category,
             userId: user.uid,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            created_by_email: user.email || 'Unknown'
           });
         }
         await batch.commit();
@@ -845,7 +871,8 @@ export default function App() {
         ...newAsset,
         asset_tag: assetTag,
         userId: user.uid,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        created_by_email: user.email || 'Unknown'
       });
       await logActivity('ADD', 'Asset', `Added asset: ${newAsset.asset_name}`);
       setShowAssetModal(false);
@@ -924,7 +951,8 @@ export default function App() {
         await addDoc(collection(db, 'licenses'), {
           ...newLicense,
           userId: user.uid,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          created_by_email: user.email || 'Unknown'
         });
         await logActivity('ADD', 'License', `Added license: ${newLicense.software_name}`);
       }
@@ -1360,7 +1388,7 @@ export default function App() {
             <Package size={24} />
           </div>
           <div>
-            <h1 className="font-bold text-lg leading-tight">IT Expense</h1>
+            <h1 className="font-bold text-lg leading-tight">IT Daily Expense</h1>
             <p className="text-xs text-slate-500">Management System</p>
           </div>
         </div>
@@ -1688,6 +1716,7 @@ export default function App() {
                       <th className="px-6 py-4 font-semibold">Date</th>
                       <th className="px-6 py-4 font-semibold">Vendor</th>
                       <th className="px-6 py-4 font-semibold">User</th>
+                      <th className="px-6 py-4 font-semibold">Created By</th>
                       <th className="px-6 py-4 font-semibold">Amount</th>
                       <th className="px-6 py-4 font-semibold">USD</th>
                       <th className="px-6 py-4 font-semibold">Type</th>
@@ -1709,6 +1738,7 @@ export default function App() {
                         <td className="px-6 py-4 text-sm font-medium">{formatDate(exp.payment_date)}</td>
                         <td className="px-6 py-4 text-sm">{exp.vendor}</td>
                         <td className="px-6 py-4 text-sm text-slate-500">{exp.user || '-'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-500">{formatUserEmail(exp.created_by_email)}</td>
                         <td className="px-6 py-4 text-sm font-bold">{exp.currency} {exp.amount.toLocaleString()}</td>
                         <td className="px-6 py-4 text-sm font-medium text-slate-500">
                           {exp.currency === 'USD' ? `$${exp.amount.toLocaleString()}` : `$${(exp.amount / EXCHANGE_RATE).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -1748,7 +1778,24 @@ export default function App() {
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="flex items-center gap-2 w-full md:w-auto flex-wrap md:flex-nowrap">
+                <div className="flex items-center bg-slate-50 rounded-xl px-3 py-1.5 border-none focus-within:ring-2 focus-within:ring-slate-900">
+                  <Calendar size={16} className="text-slate-400 mr-2" />
+                  <input 
+                    type="date" 
+                    className="bg-transparent border-none text-sm font-medium focus:outline-none w-32"
+                    value={expenseStartDate}
+                    onChange={(e) => setExpenseStartDate(e.target.value)}
+                  />
+                  <span className="text-slate-400 mx-2">to</span>
+                  <input 
+                    type="date" 
+                    className="bg-transparent border-none text-sm font-medium focus:outline-none w-32"
+                    value={expenseEndDate}
+                    onChange={(e) => setExpenseEndDate(e.target.value)}
+                  />
+                </div>
+                <div className="h-6 w-px bg-slate-200 mx-1 hidden md:block" />
                 <Filter size={18} className="text-slate-400" />
                 <select 
                   className="bg-slate-50 border-none text-sm font-medium rounded-xl focus:ring-2 focus:ring-slate-900"
@@ -1800,6 +1847,7 @@ export default function App() {
                       <th className="px-6 py-4 font-semibold">Description</th>
                       <th className="px-6 py-4 font-semibold">Category</th>
                       <th className="px-6 py-4 font-semibold">User</th>
+                      <th className="px-6 py-4 font-semibold">Created By</th>
                       <th className="px-6 py-4 font-semibold">Amount</th>
                       <th className="px-6 py-4 font-semibold">USD</th>
                       <th className="px-6 py-4 font-semibold">Method</th>
@@ -1833,6 +1881,7 @@ export default function App() {
                         <td className="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{exp.description}</td>
                         <td className="px-6 py-4 text-sm text-slate-500">{exp.category}</td>
                         <td className="px-6 py-4 text-sm text-slate-500">{exp.user || '-'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-500">{formatUserEmail(exp.created_by_email)}</td>
                         <td className="px-6 py-4 text-sm font-bold">{exp.currency} {exp.amount.toLocaleString()}</td>
                         <td className="px-6 py-4 text-sm font-medium text-slate-500">
                           {exp.currency === 'USD' ? `$${exp.amount.toLocaleString()}` : `$${(exp.amount / EXCHANGE_RATE).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -2194,6 +2243,12 @@ export default function App() {
                       <span className="font-medium text-amber-600">{formatDate(asset.warranty_expiry)}</span>
                     </div>
                   )}
+                  {asset.created_by_email && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-500">Created By</span>
+                      <span className="font-medium text-xs truncate max-w-[150px]">{formatUserEmail(asset.created_by_email)}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-6 pt-6 border-t border-slate-100 flex gap-2">
@@ -2284,6 +2339,12 @@ export default function App() {
                         <span className="text-slate-500">Cost</span>
                         <span className="font-bold text-slate-900">{license.currency} {license.cost.toLocaleString()}</span>
                       </div>
+                      {license.created_by_email && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Created By</span>
+                          <span className="font-medium text-xs truncate max-w-[120px]">{formatUserEmail(license.created_by_email)}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="mt-6 pt-6 border-t border-slate-100 flex gap-2">
